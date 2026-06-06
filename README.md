@@ -1,178 +1,153 @@
-# 📚 Course Enrollment API
+# 📚 Course Enrollment Management API
 
-A RESTful API built with **FastAPI** for managing course enrollments. It supports user registration, course management, and enrollment operations with role-based access control for admins and students.
+A secure, database-backed REST API for managing a course enrollment platform,
+built with FastAPI, SQLAlchemy (async), PostgreSQL, JWT authentication, and
+role-based access control.
 
----
+## Features
+- JWT authentication (register / login) with bcrypt-hashed passwords
+- Role-based access control (RBAC): `student` and `admin`
+- Course management with capacity and active/inactive state
+- Enrollment with business rules: unique per student, capacity-aware, active-only
+- Admin oversight of all enrollments
+- Alembic migrations and a full automated test suite (42 tests)
 
-## 🗂️ Project Structure
+## Tech stack
+FastAPI · SQLAlchemy 2.0 (async, asyncpg) · PostgreSQL · Alembic ·
+Pydantic v2 · python-jose (JWT) · bcrypt · pytest
 
-```
-app/
-├── main.py                  # App entry point
-├── api/
-│   ├── dependencies.py      # Role-based access control
-│   └── v1/
-│       ├── users.py         # User routes
-│       ├── courses.py       # Course routes
-│       └── enrollments.py   # Enrollment routes
-├── core/
-│   └── db.py                # In-memory database
-├── schemas/
-│   ├── user_schema.py
-│   ├── course_schema.py
-│   └── enroll_schema.py
-├── services/
-│   ├── user.py
-│   ├── course.py
-│   └── enroll.py
-└── tests/
-    └── api/                 # API tests
-        ├── test_user.py
-        ├── test_course.py
-        └── test_enroll.py
-```
+## Architecture
+Layered separation of concerns:
 
----
+    API router  ->  Service (business rules)  ->  Repository (DB access)  ->  Model
 
-## ⚙️ Prerequisites
+## Project structure
+    Course-Enrollment-System/
+    ├── .env.example              # template for environment variables
+    ├── .gitignore
+    ├── .dockerignore
+    ├── Dockerfile                # container image (used by Render)
+    ├── render.yaml               # Render Blueprint (web service + Postgres)
+    ├── alembic.ini               # Alembic configuration
+    ├── pytest.ini                # pytest configuration
+    ├── requirements.txt
+    ├── README.md
+    ├── alembic/
+    │   ├── env.py                # migration environment (points at Base.metadata)
+    │   ├── script.py.mako
+    │   └── versions/             # migration files
+    └── app/
+        ├── main.py               # FastAPI app + router registration
+        ├── core/
+        │   ├── config.py         # settings (env-driven)
+        │   ├── db_async.py       # async engine + Base (used by the app)
+        │   ├── db.py             # sync engine (used by Alembic)
+        │   ├── security.py       # password hashing + JWT
+        │   └── deps.py           # DB session + auth/RBAC dependencies
+        ├── models/               # SQLAlchemy ORM models
+        │   ├── user.py
+        │   ├── course.py
+        │   └── enrollment.py
+        ├── schemas/              # Pydantic request/response models
+        │   ├── auth_schema.py
+        │   ├── user_schema.py
+        │   ├── course_schema.py
+        │   ├── enroll_schema.py
+        │   └── common.py
+        ├── repositories/         # database access
+        │   ├── user_repository.py
+        │   ├── course_repository.py
+        │   └── enrollment_repository.py
+        ├── services/             # business logic
+        │   ├── auth_service.py
+        │   ├── course_service.py
+        │   └── enrollment_service.py
+        ├── api/v1/               # HTTP routes
+        │   ├── auth.py
+        │   ├── courses.py
+        │   └── enrollments.py
+        └── tests/                # pytest suite
+            └── api/
+                ├── conftest.py
+                ├── test_auth.py
+                ├── test_courses.py
+                └── test_enrollments.py
 
-- Python 3.10+
-- pip
+## Roles & permissions
+| Action                       | Student | Admin |
+|------------------------------|:-------:|:-----:|
+| View courses                 |   ✅    |  ✅   |
+| Enroll in a course           |   ✅    |  ❌   |
+| Deregister from a course     |   ✅    |  ❌   |
+| Create / update / delete course | ❌  |  ✅   |
+| View all enrollments         |   ❌    |  ✅   |
 
----
+## API endpoints
+| Method | Path                          | Access  | Description                  |
+|--------|-------------------------------|---------|------------------------------|
+| POST   | /auth/register                | public  | Register (defaults to student) |
+| POST   | /auth/token                   | public  | Log in, returns JWT          |
+| GET    | /auth/me                      | auth    | Current user's profile       |
+| GET    | /courses                      | public  | List active courses          |
+| GET    | /courses/{id}                 | public  | Get a course                 |
+| POST   | /courses                      | admin   | Create a course              |
+| PATCH  | /courses/{id}                 | admin   | Update / (de)activate course |
+| DELETE | /courses/{id}                 | admin   | Delete a course              |
+| POST   | /enrollments/{course_id}      | student | Enroll in a course           |
+| DELETE | /enrollments/{course_id}      | student | Deregister from a course     |
+| GET    | /enrollments[?course_id=]     | admin   | View all / per-course        |
+| DELETE | /enrollments/admin/{id}       | admin   | Remove any enrollment        |
 
-## 🚀 Getting Started
+## Local setup
+1. Create a PostgreSQL database:
 
-### 1. Create and activate a virtual environment
+       createdb course_enrollment
 
-```bash
-# Create virtual environment
-python -m venv venv
+2. Create your environment file from the template and fill it in:
 
-# Activate — Windows
-venv\Scripts\activate
+       cp .env.example .env
 
-# Activate — macOS/Linux
-source venv/bin/activate
-```
+   Generate a real secret key and paste it as SECRET_KEY:
 
-### 2. Install dependencies
+       python -c "import secrets; print(secrets.token_hex(32))"
 
-```bash
-pip install fastapi uvicorn pydantic
-```
+   Both DATABASE_URL and DATABASE_URL_ASYNC must point at the same database,
+   differing only in the driver (postgresql:// vs postgresql+asyncpg://).
 
----
+3. Create and activate a virtual environment, then install dependencies:
 
-## ▶️ Running the API
+       python -m venv venv
+       venv\Scripts\activate          # Windows
+       # source venv/bin/activate     # macOS/Linux
+       pip install -r requirements.txt
 
-Start the development server from the **project root** 
+## Running migrations
+Alembic manages the schema. To apply the existing migration:
 
-```bash
-uvicorn app.main:app --reload
-```
+    alembic upgrade head
 
-The API will be available at:
+To create a new migration after changing a model (use double quotes on Windows):
 
-```
-http://127.0.0.1:8000
-```
+    alembic revision --autogenerate -m "describe your change"
+    alembic upgrade head
 
-```
-http://localhost:8000
-```
+Check the current revision:
 
-### Interactive Docs
+    alembic current
 
-FastAPI generates documentation automatically. Once the server is running, visit:
+## Running the app
+    uvicorn app.main:app --reload
 
-| Interface | URL |
-|-----------|-----|
-| Swagger UI | http://127.0.0.1:8000/docs |
-| ReDoc | http://127.0.0.1:8000/redoc |
+Interactive API docs: http://127.0.0.1:8000/docs
 
----
+## Running tests
+The suite uses an isolated in-memory database, so no PostgreSQL is required and
+your real data is never touched:
 
-## 📌 API Overview
+    pytest
 
-### Users — `/users`
-
-| Method | Endpoint | Description | Auth |
-|--------|----------|-------------|------|
-| POST | `/users/` | Create a new user | None |
-| GET | `/users/` | Get all users | None |
-| GET | `/users/{user_id}` | Get a user by ID | None |
-
-### Courses — `/courses`
-
-| Method | Endpoint | Description | Auth |
-|--------|----------|-------------|------|
-| POST | `/courses/?user_id=` | Create a course | Admin |
-| PUT | `/courses/{course_id}?user_id=` | Update a course | Admin |
-| DELETE | `/courses/{course_id}?user_id=` | Delete a course | Admin |
-| GET | `/courses/` | Get all courses | None |
-| GET | `/courses/{course_id}` | Get a course by ID | None |
-
-### Enrollments — `/enrollments`
-
-| Method | Endpoint | Description | Auth |
-|--------|----------|-------------|------|
-| POST | `/enrollments/?user_id=` | Enroll in a course | Student |
-| DELETE | `/enrollments/{enroll_id}?user_id=` | Deregister from a course | Student (own only) |
-| GET | `/enrollments/users/{user_id}?user_id=` | Get a student's enrollments | Student (own only) |
-| GET | `/enrollments/?user_id=` | Get all enrollments | Admin |
-| GET | `/enrollments/courses/{course_id}?user_id=` | Get enrollments for a course | Admin |
-| DELETE | `/enrollments/force/{enroll_id}?user_id=` | Force remove a student | Admin |
-
-> **Note:** Authentication is handled via the `user_id` query parameter. The API checks the user's role from the in-memory database and returns `403 Forbidden` if the role doesn't match the required permission.
-
----
-
-## 🧪 Running the Tests
-
-### 1. Install test dependencies
-
-```bash
-pip install pytest httpx
-```
-
-### 2. Run all tests
-
-From the **project root**, run:
-
-```bash
-pytest app/tests/api/ -v
-```
-
-### 3. Run tests for a specific module
-
-```bash
-# Users only
-pytest app/tests/api/test_user.py -v
-
-# Courses only
-pytest app/tests/api/test_course.py -v
-
-# Enrollments only
-pytest app/tests/api/test_enroll.py -v
-```
-
-### 4. Run a specific test class or test
-
-```bash
-# Run a specific class
-pytest app/tests/api/test_course.py::TestCreateCourse -v
-
-# Run a single test
-pytest app/tests/api/test_course.py::TestCreateCourse::test_duplicate_course_code -v
-```
-
----
-
-## 🗒️ Notes
-
-- The database is **in-memory** — all data is lost when the server restarts.
-- Tests automatically clear the database before each test case using a pytest `autouse` fixture, so tests are fully isolated from one another.
+All 42 tests should pass.
 
 
-# ENJOY😁
+
+# LFG😁🚀🚀

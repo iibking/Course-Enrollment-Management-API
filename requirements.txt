@@ -1,0 +1,14 @@
+fastapi[all]
+uvicorn
+sqlalchemy
+asyncpg                 
+psycopg2-binary         
+alembic
+bcrypt         
+python-jose[cryptography]   
+
+# Tests
+pytest
+pytest-asyncio
+httpx
+aiosqlite               # in-memory async DB for the test suite

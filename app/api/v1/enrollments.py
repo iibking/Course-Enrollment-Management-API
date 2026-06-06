@@ -1,60 +1,65 @@
-from fastapi import APIRouter,Depends, HTTPException, status
-from app.schemas.enroll_schema import EnrollCreate, Enroll
-from app.services.enroll import EnrollService
-from app.api.dependencies import is_student_user, is_admin_user
-from app.schemas.user_schema import User
-from app.services.course import CourseService
-from typing import List
+from typing import Optional
+
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.deps import get_async_db, require_admin, require_student
+from app.models.user import User
+from app.schemas.common import MessageResponse
+from app.schemas.enroll_schema import EnrollmentRead, EnrollmentAdminRead
+from app.services.enrollment_service import EnrollmentService
+
+router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
 
 
-enroll_router = APIRouter()
-
-#Enrolling for a course (Student only)
-@enroll_router.post("/", response_model=Enroll, status_code=status.HTTP_201_CREATED)
-def create_enrollment(enroll_in: EnrollCreate, current_user: User = Depends(is_student_user)):
-    if enroll_in.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only students can enroll")
-    return EnrollService.enroll_create(enroll_in)
-
-
-#Forcefully deregister a student from a course (Admin only)
-@enroll_router.delete("/force/{enroll_id}", status_code=status.HTTP_200_OK)
-def force_deregister_course(enroll_id: int, current_user: User = Depends(is_admin_user)):
-    enrollment = EnrollService.get_enrollments_by_id(enroll_id)
-    if not enrollment:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enrollment not found")
-    return EnrollService.delete_enrollment(enroll_id)
+# Student actions 
+@router.post("/{course_id}", response_model=EnrollmentRead, status_code=status.HTTP_201_CREATED)
+async def enroll(
+    course_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    student: User = Depends(require_student),
+):
+    """Student: enrol in a course. Enforces active """
+    enrollment = await EnrollmentService.enroll(db, student, course_id)
+    await db.commit()
+    return enrollment
 
 
-#Deregistering from a course (Student only)
-@enroll_router.delete("/{enroll_id}", status_code=status.HTTP_200_OK)
-def deregister_course(enroll_id: int, current_user: User = Depends(is_student_user)):
-    enrollment = EnrollService.get_enrollments_by_id(enroll_id)
-    if not enrollment:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enrollment not found")
-    if enrollment.user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only students can deregister")
-    return EnrollService.delete_enrollment(enroll_id)
+@router.delete("/{course_id}", response_model=MessageResponse)
+async def deregister(
+    course_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    student: User = Depends(require_student),
+):
+    """Student: deregister yourself from a course (404 if not enrolled)."""
+    await EnrollmentService.deregister(db, student, course_id)
+    await db.commit()
+    return MessageResponse(message="Deregistered successfully")
 
 
-#Enrollment retrieval for a particular student
-@enroll_router.get("/users/{user_id}", response_model=List[Enroll])
-def get_enrollments_by_user(user_id: int, current_user: User = Depends(is_student_user)):
-    if user_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Students can only view their own enrollments")
-    return EnrollService.get_enrollments_by_user(user_id)
+# Admin oversight 
+@router.get("", response_model=list[EnrollmentAdminRead])
+async def list_enrollments(
+    course_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: User = Depends(require_admin),
+):
+    """
+    Admin: view all enrollments, or only those for a course
+    Each row embeds the student and course details.
+    """
+    if course_id is not None:
+        return await EnrollmentService.list_for_course(db, course_id)
+    return await EnrollmentService.list_all(db)
 
 
-#Enrollments retrieval (Admin only)
-@enroll_router.get("/", response_model=List[Enroll])
-def get_enrollments(current_user: User = Depends(is_admin_user)):
-    return EnrollService.get_enrollments()
-
-
-#Enrollments retrieval for a particular course (Admin only)
-@enroll_router.get("/courses/{course_id}", response_model=List[Enroll])
-def get_enrollments_by_course(course_id: int, current_user: User = Depends(is_admin_user)):
-    course = CourseService.get_courses_by_id(course_id)
-    if not course:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
-    return EnrollService.get_enrollment_by_course(course_id)
+@router.delete("/admin/{enrollment_id}", response_model=MessageResponse)
+async def admin_remove_enrollment(
+    enrollment_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: User = Depends(require_admin),
+):
+    """Admin: remove any enrollment by its id (404 if missing)."""
+    await EnrollmentService.admin_remove(db, enrollment_id)
+    await db.commit()
+    return MessageResponse(message="Enrollment removed successfully")

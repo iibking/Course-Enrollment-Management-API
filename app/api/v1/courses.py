@@ -1,40 +1,61 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from app.schemas.course_schema import Course, CourseCreate, CourseUpdate
-from app.services.course import CourseService
-from app.api.dependencies import is_admin_user, is_student_user
-from app.schemas.user_schema import User
-from typing import List
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
-course_router = APIRouter()
+from app.core.deps import get_async_db, require_admin
+from app.models.user import User
+from app.schemas.common import MessageResponse
+from app.schemas.course_schema import CourseCreate, CourseUpdate, CourseRead
+from app.services.course_service import CourseService
 
-##Course manipulation (Admin only)
-#Course creation 
-@course_router.post("/", response_model=Course, status_code=status.HTTP_201_CREATED)
-def create_course(course_in: CourseCreate, current_user: User = Depends(is_admin_user)):
-    return CourseService.create_course(course_in)
-
-#Course update
-@course_router.put("/{course_id}", response_model=Course, status_code=status.HTTP_200_OK)
-def update_course(course_id: int, course_in: CourseUpdate, current_user: User = Depends(is_admin_user)):
-    return CourseService.update_course(course_id, course_in)
-
-#Course deletion
-@course_router.delete("/{course_id}", status_code=status.HTTP_200_OK)
-def delete_course(course_id: int, current_user: User = Depends(is_admin_user)):
-    CourseService.delete_course(course_id)
-    return {"Message": "Course deleted successfully"} 
+router = APIRouter(prefix="/courses", tags=["Courses"])
 
 
-##Course retrieval (Public)
-# To retrieve all courses  
-@course_router.get("/", response_model=List[Course])
-def get_courses():
-    return CourseService.get_courses()
+# Public reads 
+@router.get("", response_model=list[CourseRead])
+async def list_courses(db: AsyncSession = Depends(get_async_db)):
+    """Public: list all active courses."""
+    return await CourseService.list_active(db)
 
-#To retrieve a course by ID
-@course_router.get("/{course_id}", response_model=Course)
-def get_course_by_id(course_id: int):
-    course = CourseService.get_courses_by_id(course_id)
-    if not course:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Course not found")
+
+@router.get("/{course_id}", response_model=CourseRead)
+async def get_course(course_id: int, db: AsyncSession = Depends(get_async_db)):
+    """Public: retrieve a single course by id (404 if missing)."""
+    return await CourseService.get(db, course_id)
+
+
+# Admin-only writes 
+@router.post("", response_model=CourseRead, status_code=status.HTTP_201_CREATED)
+async def create_course(
+    data: CourseCreate,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: User = Depends(require_admin),
+):
+    """Admin: create a course. Code must be unique (409)."""
+    course = await CourseService.create(db, data)
+    await db.commit()
     return course
+
+
+@router.patch("/{course_id}", response_model=CourseRead)
+async def update_course(
+    course_id: int,
+    data: CourseUpdate,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: User = Depends(require_admin),
+):
+    """Admin: update course details, including is_active to (de)activate it."""
+    course = await CourseService.update(db, course_id, data)
+    await db.commit()
+    return course
+
+
+@router.delete("/{course_id}", response_model=MessageResponse)
+async def delete_course(
+    course_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _admin: User = Depends(require_admin),
+):
+    """Admin: delete a course (and its enrollments via cascade)."""
+    await CourseService.delete(db, course_id)
+    await db.commit()
+    return MessageResponse(message="Course deleted successfully")
